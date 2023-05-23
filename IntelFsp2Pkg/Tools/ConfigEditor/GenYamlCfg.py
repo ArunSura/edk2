@@ -226,6 +226,7 @@ class CFG_YAML():
     TEMPLATE = 'template'
     CONFIGS = 'configs'
     VARIABLE = 'variable'
+    FORMSET = 'Formset'
 
     def __init__(self):
         self.log_line = False
@@ -235,6 +236,7 @@ class CFG_YAML():
         self.var_dict = None
         self.def_dict = {}
         self.yaml_path = ''
+        self.yaml_type = 'formset'
         self.lines = []
         self.full_lines = []
         self.index = 0
@@ -357,6 +359,7 @@ class CFG_YAML():
     def load_file(self, yaml_file):
         self.index = 0
         self.lines = read_lines(yaml_file)
+        #print("self.lines ", self.lines)
 
     def peek_line(self):
         if len(self.lines) == 0:
@@ -414,21 +417,31 @@ class CFG_YAML():
         return num[0]
 
     def parse(self, parent_name='', curr=None, level=0):
+        print("Parse Fuction Called")
         child = None
         last_indent = None
         key = ''
         temp_chk = {}
+        temp_data = []
 
         while True:
             line = self.get_line()
+            print("Line ", line)
             if line is None:
                 break
 
             curr_line = line.strip()
+            print("Current Line ", curr_line)
+            if curr_line == "## DO NOT REMOVE -- VFR Mode":
+                self.yaml_type = "formset"
+                print("YAML Type ", self.yaml_type)
+            
             if curr_line == '' or curr_line[0] == '#':
                 continue
 
             indent = CFG_YAML.count_indent(line)
+            print("Indent ", indent)
+            print("last Indent ", last_indent)
             if last_indent is None:
                 last_indent = indent
 
@@ -437,7 +450,8 @@ class CFG_YAML():
                 self.put_line(' ' * indent + curr_line)
 
             if curr_line.endswith(': >'):
-                # multiline marker
+                # multiline 
+                print("MultiLine Part")
                 old_count = len(self.full_lines)
                 line = self.get_multiple_line(indent)
                 if self.log_line and not self.allow_template \
@@ -455,14 +469,19 @@ class CFG_YAML():
                     self.full_lines = self.full_lines[:old_count] + new_lines
                 curr_line = curr_line + line
 
+            
             if indent > last_indent:
                 # child nodes
                 if child is None:
                     raise Exception('Unexpected format at line: %s'
                                     % (curr_line))
-
+                print("Child Node construction")
                 level += 1
-                self.parse(key, child, level)
+                print("Level ", level)
+                
+                temp = self.parse(key, child, level)
+                if level > 3:
+                    print("Temp data", temp)
                 level -= 1
                 line = self.peek_line()
                 if line is not None:
@@ -473,21 +492,35 @@ class CFG_YAML():
                         self.get_line()
                 else:
                     # end of file
+                    print("End of file ")
                     indent = -1
 
             if curr is None:
                 curr = OrderedDict()
 
             if indent < last_indent:
+                print("Indent cond return part ", curr)
                 return curr
 
             marker1 = curr_line[0]
-            marker2 = curr_line[-1]
+            print('Marker1 ', marker1)
             start = 1 if marker1 == '-' else 0
             pos = curr_line.find(': ')
+            print("pos1 ", pos)
+            print("curr_line.find  ", curr_line.find(":"))
+            if marker1 == '-':
+                marker2 = curr_line[curr_line.find(":")]
+                print("Marker 2 ", marker2)
+                pos = -1
+                print("pos2 ", pos)
+            else:
+                marker2 = curr_line[-1]
+
+
             if pos > 0:
                 child = None
                 key = curr_line[start:pos].strip()
+
                 if curr_line[pos + 2] == '>':
                     curr[key] = curr_line[pos + 3:]
                 else:
@@ -498,6 +531,7 @@ class CFG_YAML():
                         if self.allow_template and not self.log_line:
                             self.process_expand(line)
                     else:
+                        print("Value construction part")
                         value_str = curr_line[pos + 2:].strip()
                         curr[key] = value_str
                         if self.log_line and value_str[0] == '{':
@@ -510,21 +544,50 @@ class CFG_YAML():
                                     :indent] + curr_line[:pos + 2] + value_str
 
             elif marker2 == ':':
+                print("Marker 2 part")
                 child = OrderedDict()
                 key = curr_line[start:-1].strip()
                 if key == '$ACTION':
                     # special virtual nodes, rename to ensure unique key
                     key = '$ACTION_%04X' % self.index
                     self.index += 1
-                if key in curr:
-                    if key not in temp_chk:
-                        # check for duplicated keys at same level
-                        temp_chk[key] = 1
-                    else:
-                        raise Exception("Duplicated item '%s:%s' found !"
-                                        % (parent_name, key))
 
-                curr[key] = child
+                print("self.yaml_type ", self.yaml_type)
+                if self.yaml_type =='fsp':
+                    if key in curr:
+                        if key not in temp_chk:
+                            # check for duplicated keys at same level
+                            print("if part in temporary found")
+                            temp_chk[key] = 1
+                        else:
+                            print("Temporary key found")
+                            print("Key in parse ", key)
+                            print("Curr in temporary found ", curr)
+                            raise Exception("Duplicated item '%s:%s' found !"
+                                            % (parent_name, key))
+                
+                    curr[key] = child
+                if self.yaml_type == 'formset': 
+                    print("Current ", curr)
+                    
+                    if key in curr.keys():
+                        print("Keys match found")
+                        print("current[key] found ", curr[key])
+                        if type(curr[key]) == type([]):
+                            print("List type found")
+                            temp_data = curr[key]
+                        else:
+                            temp_data.append(curr[key])
+                            print("some type of data found")
+                            
+                        temp_data.append(child)
+                        print("Temp data ", temp_data)
+                        if level < 4:
+                            curr[key] = temp_data
+                        temp_data = []
+                    else:
+                        if level < 4:
+                            curr[key] = child
                 if self.var_dict is None and key == CFG_YAML.VARIABLE:
                     self.var_dict = child
                 if self.tmp_tree is None and key == CFG_YAML.TEMPLATE:
@@ -537,12 +600,15 @@ class CFG_YAML():
                 if self.tmp_tree and key == CFG_YAML.CONFIGS:
                     # apply template for the main configs
                     self.allow_template = True
+                if self.tmp_tree and key == CFG_YAML.FORMSET:
+                    self.allow_template = True
             else:
                 child = None
                 # - !include cfg_opt.yaml
                 if '!include ' in curr_line:
                     self.process_include(line)
 
+        print("Return Part Curr ", curr)
         return curr
 
     def load_yaml(self, opt_file):
@@ -550,8 +616,24 @@ class CFG_YAML():
         self.yaml_path = os.path.dirname(opt_file)
         self.load_file(opt_file)
         yaml_tree = self.parse()
-        self.tmp_tree = yaml_tree[CFG_YAML.TEMPLATE]
-        self.cfg_tree = yaml_tree[CFG_YAML.CONFIGS]
+        for key in yaml_tree.keys():
+            print("Keys in CFG Tree", key)
+            if key == "Formset":
+                print("Formset Found")
+                self.yaml_type = 'formset'
+                break
+            else:
+                print("Config Part")
+                self.yaml_type = 'fsp'
+                break
+        print("YAML tree ", yaml_tree)
+        if self.yaml_type == 'formset':
+            self.cfg_tree = yaml_tree[CFG_YAML.FORMSET]
+            print("self.cfg_tree in load_yaml ", self.cfg_tree)
+        elif self.yaml_type == 'fsp':
+            self.tmp_tree = yaml_tree[CFG_YAML.TEMPLATE]
+            self.cfg_tree = yaml_tree[CFG_YAML.CONFIGS]
+        
         return self.cfg_tree
 
     def expand_yaml(self, opt_file):
@@ -597,6 +679,10 @@ class CGenYamlCfg:
         self._var_dict = {}
         self._def_dict = {}
         self._yaml_path = ''
+        self.yaml_type = ''
+        #Added to overcome duplicate formid
+        self.form_page_map = {}
+        self.formset_level = 0
 
     @staticmethod
     def deep_convert_dict(layer):
@@ -760,13 +846,27 @@ class CGenYamlCfg:
         return error
 
     def get_cfg_list(self, page_id=None):
+        print("get CFG List call")
+        cfgs = []
         if page_id is None:
             # return full list
             return self._cfg_list
         else:
-            # build a new list for items under a page ID
-            cfgs = [i for i in self._cfg_list if i['cname'] and
-                    (i['page'] == page_id)]
+            if self.yaml_type == 'fsp':
+                # build a new list for items under a page ID
+                cfgs = [i for i in self._cfg_list if i['cname'] and
+                        (i['page'] == page_id)]
+            #VFR YAML Support Start
+            elif self.yaml_type =='formset':
+                for cfg in self._cfg_list:
+                    print("CFG in getCfgList ", cfg)
+                    for i in cfg:
+                        print("i in getCfgList ", i)
+                        #if type(i) == type([]):
+                        #    print("List type matched")
+                        if (i['page'] == page_id):
+                            cfgs.append(i)
+            #VFR YAML Support End
             return cfgs
 
     def get_cfg_page(self):
@@ -1069,6 +1169,7 @@ option format '%s' !" % option)
 
     def build_var_dict(self):
         def _build_var_dict(name, cfgs, level):
+            print("CFGs ",cfgs)
             if level <= 2:
                 if CGenYamlCfg.STRUCT in cfgs:
                     struct_info = cfgs[CGenYamlCfg.STRUCT]
@@ -1079,6 +1180,7 @@ option format '%s' !" % option)
 
         self._var_dict = {}
         self.traverse_cfg_tree(_build_var_dict)
+        print("self._cfg_tree[CGenYamlCfg.STRUCT] ", self._cfg_tree[CGenYamlCfg.STRUCT])
         self._var_dict['_LENGTH_'] = self._cfg_tree[CGenYamlCfg.STRUCT][
             'length'] // 8
         return 0
@@ -1156,9 +1258,10 @@ option format '%s' !" % option)
 
     def add_cfg_item(self, name, item, offset, path):
 
+        print("Add Cfg Item")
         self.set_cur_page(item.get('page', ''))
 
-        if name[0] == '$':
+        if name != '' and name[0] == '$':
             # skip all virtual node
             return 0
 
@@ -1188,7 +1291,7 @@ option format '%s' !" % option)
             # define is length in bytes
             length = length * 8
 
-        if not name.isidentifier():
+        if name != '' and not name.isidentifier():
             raise Exception("Invalid config name '%s' for '%s' !" %
                             (name, '.'.join(path)))
 
@@ -1251,10 +1354,14 @@ option format '%s' !" % option)
         item.pop('name', None)
         item.pop('page', None)
 
+        print("Add CFG_Item ", self._cfg_list)
+
         return length
 
     def build_cfg_list(self, cfg_name='', top=None, path=[],
                        info={'offset': 0}):
+
+        print("Build CFG List call")
         if top is None:
             top = self._cfg_tree
             info.clear()
@@ -1263,6 +1370,7 @@ option format '%s' !" % option)
         start = info['offset']
         is_leaf = True
         for key in top:
+            print("Key in for ", key)
             path.append(key)
             if type(top[key]) is OrderedDict:
                 is_leaf = False
@@ -1287,6 +1395,157 @@ option format '%s' !" % option)
             if struct_node['length'] % 8 != 0:
                 raise SystemExit("Error: Bits length not aligned for %s !" %
                                  str(path))
+
+
+#EDK2 VFR YAML Support start
+
+    #def add_fprm_page(self):
+    #    self._cfg_page['root']['title'] = 'Formset'
+
+    def build_formset_list(self, form_name='', top=None, parent_form=''):
+
+        print("Build Formset List call")
+        if top is None:
+            top = self._cfg_tree
+            print("Top in Formset List ", top) 
+            form_name = "Formset"
+            self._cfg_page['root']['title'] = 'Formset'
+
+        is_leaf = True
+        """
+        if form_name == "form" or form_name == "formid" or form_name == "formmap":
+            #self._cur_page = form_name
+            #self._cur_page = top["FormTitle"].split('#')[0]
+            self._cur_page = top["FormId"].split('#')[0]
+            print("self._cur_page ", self._cur_page)
+            print("Form Name ", form_name)
+            self._cfg_page['root']['child'].append({self._cur_page: {'title': self._cur_page,
+                                                       'child': []}})
+        
+        """
+        if form_name == "form" or form_name == "formid":
+            self._cur_page = top["FormTitle"].split('#')[0]
+            print("self._cur_page ", self._cur_page)
+            print("Form Name ", form_name)
+            self.form_page_map[top['FormId'].split('#')[0]] = self._cur_page
+            print("self.form_page_map ", self.form_page_map)
+            self._cfg_page['root']['child'].append({self._cur_page: {'title': self._cur_page,
+                                                       'child': []}}) 
+
+        if form_name == "formmap":
+            self._cur_page = top["FormId"].split('#')[0]
+            print("self._cur_page ", self._cur_page)
+            print("Form Name ", form_name)
+            self.form_page_map[top['FormId'].split('#')[0]] = self._cur_page
+            print("self.form_page_map ", self.form_page_map)
+            self._cfg_page['root']['child'].append({self._cur_page: {'title': self._cur_page,
+                                                       'child': []}}) 
+              
+        
+        form_data = {}
+        temp_data = []
+        for key in top:
+            print("Key in for ", key)
+            #path.append(key)
+            print("top [key] ", top[key])
+            print("self.formset level ", self.formset_level)
+            if type(top[key]) is list and self.formset_level <= 1:
+                print("list type found")
+                self.formset_level += 1
+                for data in top[key]:
+                    print("Data in top[key] ", data)
+                    print("formset level in for ", self.formset_level)
+                    self.build_formset_list(key, data, key)
+                self.formset_level -= 1
+            elif type(top[key]) is OrderedDict and self.formset_level <= 1:
+                #form_data['child'].append(key)
+                if parent_form != '':
+                    self.formset_level += 1
+                    print("formset level in if ", self.formset_level)
+                    self.build_formset_list(key, top[key], form_name)
+                    self.formset_level -= 1
+                else:
+                    self.formset_level += 1
+                    print("formset level in else ", self.formset_level)
+                    self.build_formset_list(key, top[key], key)
+                    self.formset_level -= 1
+
+            else:
+                form_data["page"] = self._cur_page
+                form_data[key] = top[key]
+                if form_name != 'form' or form_name != "formid":
+                    form_data["type"] = form_name
+                else:
+                    form_data["type"] = ""
+                print("Else part in build form ")
+                count = 0
+                for cfg_name in self._cfg_list:
+                    print('CFG NAME ', cfg_name)
+                    for list_data in cfg_name:
+                        if key == list_data['type']:
+                            count +=1
+                print("count ", count)
+                if count > 1:
+                    temp_data = cfg_name
+                    
+                
+                
+                """
+                    if key in cfg_name.keys():
+                        print("duplicate key in else part")
+                        print("CFG NAME TYPE ", type(cfg_name[key]), cfg_name[key])
+                        if type(cfg_name) is list:
+                            temp_data = cfg_name
+                        else:
+                            temp_data.append(cfg_name)
+                        print("TEMP data type ", type(temp_data), temp_data)
+                        temp_data.append(top[key])
+                        #print("Temp Data ", temp_data)
+                        form_data[key] = temp_data
+                        #break 
+
+                if temp_data == []:
+                    form_data[key] = top[key]
+                else:
+                    temp_data = []
+                
+                print("List Construction")
+                form_data[key] = top[key]
+                """
+                
+        """
+            elif key in i.keys() for i in self._cfg_list:
+                print("Else part in cfg List ", form_data.keys().__len__)
+                if form_data.keys().__len__ == 0:
+                    form_data[key] = []
+                form_data[key].append(top[key])
+            else:
+                form_data[key] = top[key]
+
+            #path.pop()
+        #if parent_form != '' :
+        form_data['page'] = parent_form
+        #else:
+        #    form_data['page'] = form_name
+        #Add page to page list
+
+        #if form_data['child'] != []:
+        """
+        #self._cfg_page['root']['child'].append(parent_form)
+        
+        #self.set_cur_page(form_data.get('page', ''))
+        #self._cfg_list.insert(0,form_data)
+
+        print("Form data type ", type(form_data))
+        print("Form Data ", form_data)
+        temp_data.append(form_data)
+        self._cfg_list.append(temp_data)
+        return
+
+        #if is_leaf:
+        #    length = self.add_form_item(form_name, top, info['offset'], path)
+
+#EDK2 VFR YAML Support start
 
     def get_field_value(self, top=None):
         def _get_field_value(name, cfgs, level):
@@ -1424,7 +1683,7 @@ option format '%s' !" % option)
                             act_cfg['value'], act_cfg['length'])
                     except Exception:
                         raise Exception("Invalid value expression '%s' \
-for '%s' !" % (act_cfg['value'], act_cfg['path']))
+for '%s' !" % (act_cfg['value'], act_cfg['path'] ))
             else:
                 if CGenYamlCfg.STRUCT in cfgs and 'value' in \
                    cfgs[CGenYamlCfg.STRUCT]:
@@ -2195,11 +2454,19 @@ xbe\x8f\x64\x12\x05\x8d\x0a\xa8'
         cfg_yaml = CFG_YAML()
         self.initialize()
         self._cfg_tree = cfg_yaml.load_yaml(cfg_file)
+        print("self._cfg_tree in yaml ", self._cfg_tree)
         self._def_dict = cfg_yaml.def_dict
+        self.yaml_type = cfg_yaml.yaml_type
         self._yaml_path = os.path.dirname(cfg_file)
-        self.build_cfg_list()
-        self.build_var_dict()
-        self.update_def_value()
+        if self.yaml_type == 'formset':
+            self.build_formset_list()
+            print('CFG List ', self._cfg_list)
+            print("self._cfg_page ", self._cfg_page)
+        elif self.yaml_type == 'fsp':
+            self.build_cfg_list()
+            print("CFG page ", self._cfg_page)
+            self.build_var_dict()
+            self.update_def_value()
         return 0
 
 
@@ -2338,7 +2605,8 @@ def main():
     if dlt_file:
         gen_cfg_data.override_default_value(dlt_file)
 
-    gen_cfg_data.detect_fsp()
+    if gen_cfg_data.yaml_type == 'fsp':
+        gen_cfg_data.detect_fsp()
 
     if command == "GENBIN":
         if len(file_list) == 3:
